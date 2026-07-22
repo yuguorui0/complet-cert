@@ -163,11 +163,6 @@ export default function CertificatePage() {
   async function handleDownloadPDF() {
     if (!printRef.current) return;
     const el = printRef.current;
-    // Wait until the browser has resolved the final font metrics. This keeps
-    // html2canvas's line boxes consistent with the visible preview.
-    if ("fonts" in document) {
-      await document.fonts.ready;
-    }
     const canvas = await html2canvas(el, {
       scale: 2,
       useCORS: true,
@@ -763,19 +758,13 @@ const inputCls = "w-full border border-[#dde4ed] rounded px-3 py-1.5 text-sm tex
 function PSecTitle({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
-      display: "flex",
-      alignItems: "center",
-      boxSizing: "border-box",
       backgroundColor: "#2B5F8B",
       color: "white",
       fontWeight: 700,
       fontSize: "7pt",
-      lineHeight: "1.2",
-      height: "5.5mm",
-      padding: "0 3mm",
+      padding: "1.2mm 3mm",
       marginBottom: "1.5mm",
       letterSpacing: "0.3px",
-      fontFamily: "Arial, Helvetica, 'Microsoft YaHei', sans-serif",
     }}>
       {children}
     </div>
