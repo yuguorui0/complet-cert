@@ -42,6 +42,13 @@ interface CertData {
   enriginSig: string;
 }
 
+interface SavedDraft {
+  id: string;
+  name: string;
+  savedAt: string;
+  data: CertData;
+}
+
 const SERVICE_TYPES = [
   "Problem Handling",
   "Software Upgrade",
@@ -78,8 +85,37 @@ const defaultData: CertData = {
   enriginSig: "sig_default",
 };
 
+const AUTOSAVE_KEY = "completion-cert-autosave-v1";
+const DRAFTS_KEY = "completion-cert-drafts-v1";
 const A4_RATIO = 297 / 210;
 const WORD_A4_WIDTH_PX = 780;
+
+function loadAutosave(): CertData {
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    return raw ? { ...defaultData, ...JSON.parse(raw) } : defaultData;
+  } catch {
+    return defaultData;
+  }
+}
+
+function loadDrafts(): SavedDraft[] {
+  try {
+    const raw = localStorage.getItem(DRAFTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function createDraftId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatSavedAt(value: string) {
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
 
 async function waitForImages(root: HTMLElement) {
   const images = Array.from(root.querySelectorAll("img"));
@@ -170,9 +206,15 @@ function today() {
 }
 
 export default function CertificatePage() {
-  const [data, setData] = useState<CertData>(defaultData);
+  const [data, setData] = useState<CertData>(() => loadAutosave());
   const [mode, setMode] = useState<"form" | "preview">("form");
   const [showSettings, setShowSettings] = useState(false);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [drafts, setDrafts] = useState<SavedDraft[]>(() => loadDrafts());
+  const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
+  const [saveNotice, setSaveNotice] = useState("自动保存已开启");
   const printRef = useRef<HTMLDivElement>(null);
   const {
     options,
@@ -187,6 +229,18 @@ export default function CertificatePage() {
       img.decode?.().catch(() => undefined);
     });
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data));
+        setSaveNotice("已自动保存");
+      } catch {
+        setSaveNotice("自动保存失败");
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [data]);
 
   function set<K extends keyof CertData>(key: K, val: CertData[K]) {
     setData((d) => ({ ...d, [key]: val }));
@@ -259,6 +313,61 @@ export default function CertificatePage() {
     }));
   }
 
+  function openSaveDialog() {
+    const existing = drafts.find((draft) => draft.id === currentDraftId);
+    setDraftName(
+      existing?.name ||
+        data.projectName ||
+        data.projectCode ||
+        `未命名草稿 ${new Date().toLocaleDateString("zh-CN")}`,
+    );
+    setShowSaveDialog(true);
+  }
+
+  function saveDraft() {
+    const name = draftName.trim();
+    if (!name) return;
+
+    const id = currentDraftId || createDraftId();
+    const record: SavedDraft = {
+      id,
+      name,
+      savedAt: new Date().toISOString(),
+      data,
+    };
+    const next = currentDraftId
+      ? drafts.map((draft) => (draft.id === currentDraftId ? record : draft))
+      : [record, ...drafts];
+
+    try {
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(next));
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data));
+      setDrafts(next);
+      setCurrentDraftId(id);
+      setShowSaveDialog(false);
+      setSaveNotice("已保存到历史");
+    } catch {
+      setSaveNotice("保存失败，请检查浏览器存储空间");
+    }
+  }
+
+  function loadDraft(draft: SavedDraft) {
+    setData({ ...defaultData, ...draft.data });
+    setCurrentDraftId(draft.id);
+    setMode("form");
+    setShowHistory(false);
+    setSaveNotice(`已加载：${draft.name}`);
+  }
+
+  function deleteDraft(id: string) {
+    const draft = drafts.find((item) => item.id === id);
+    if (!confirm(`确认删除“${draft?.name || "这个草稿"}”？`)) return;
+    const next = drafts.filter((item) => item.id !== id);
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(next));
+    setDrafts(next);
+    if (currentDraftId === id) setCurrentDraftId(null);
+  }
+
   function handlePrint() {
     window.print();
   }
@@ -322,8 +431,10 @@ export default function CertificatePage() {
 
   function handleReset() {
     if (confirm("确认清空所有内容并重新填写？")) {
-      setData(defaultData);
+      setData({ ...defaultData, completionDate: new Date().toISOString().split("T")[0] });
+      setCurrentDraftId(null);
       setMode("form");
+      setSaveNotice("已新建空白表单");
     }
   }
 
@@ -340,15 +451,28 @@ export default function CertificatePage() {
   return (
     <div className="min-h-screen bg-[#f0f4f8]">
       {/* Top bar */}
-      <div className="no-print sticky top-0 z-50 bg-white border-b border-[#dde4ed] shadow-sm flex items-center justify-between px-6 py-3">
+      <div className="no-print sticky top-0 z-50 bg-white border-b border-[#dde4ed] shadow-sm flex items-center justify-between gap-4 px-6 py-3">
         <div className="flex items-center gap-3">
           <img src={logo} alt="Enrigin" className="h-8 w-auto" />
           <div>
             <div className="font-semibold text-[#1e3a52] text-sm leading-none">完工确认书模板</div>
             <div className="text-xs text-[#6b8099] mt-0.5">Completion &amp; Acceptance Certificate</div>
+            <div className="text-[10px] text-[#8aa0b2] mt-0.5">{saveNotice}</div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2 flex-wrap">
+          <button
+            onClick={openSaveDialog}
+            className="px-4 py-1.5 rounded text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+          >
+            保存 / Save
+          </button>
+          <button
+            onClick={() => setShowHistory(true)}
+            className="px-4 py-1.5 rounded text-sm font-medium border border-emerald-600 text-emerald-700 hover:bg-emerald-50 transition-colors"
+          >
+            历史 / History{drafts.length > 0 ? ` (${drafts.length})` : ""}
+          </button>
           <button
             onClick={() => setShowSettings(true)}
             className="px-4 py-1.5 rounded text-sm font-medium border border-gray-300 text-gray-500 hover:bg-gray-50 transition-colors"
@@ -814,6 +938,136 @@ export default function CertificatePage() {
 
             {/* Footer */}
             <div style={{ marginTop: "4mm", borderTop: "1px solid #dde7f0", paddingTop: "2mm", textAlign: "center", fontSize: "6pt", color: "#aaa" }}>ENRIGIN LIMITED 英源國際有限公司</div>
+          </div>
+        </div>
+      )}
+
+      {showSaveDialog && (
+        <div
+          className="no-print fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4"
+          onClick={() => setShowSaveDialog(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="save-draft-title"
+            className="w-full max-w-md rounded-xl bg-white shadow-2xl overflow-hidden"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="bg-emerald-600 px-5 py-4">
+              <h2 id="save-draft-title" className="font-semibold text-white">保存草稿 / Save Draft</h2>
+              <p className="mt-1 text-xs text-emerald-100">保存后可在「历史」中继续编辑</p>
+            </div>
+            <div className="p-5">
+              <label className="block text-xs font-medium text-gray-500 mb-1">草稿名称</label>
+              <input
+                autoFocus
+                value={draftName}
+                onChange={(event) => setDraftName(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && saveDraft()}
+                className={inputCls}
+                placeholder="例如：香港机房项目 - 待客户确认"
+              />
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  onClick={() => setShowSaveDialog(false)}
+                  className="px-4 py-2 rounded border border-gray-300 text-sm text-gray-600 hover:bg-gray-50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={saveDraft}
+                  disabled={!draftName.trim()}
+                  className="px-5 py-2 rounded bg-emerald-600 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
+                >
+                  确认保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHistory && (
+        <div
+          className="no-print fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4"
+          onClick={() => setShowHistory(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="history-title"
+            className="w-full max-w-2xl max-h-[82vh] rounded-xl bg-white shadow-2xl overflow-hidden flex flex-col"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="bg-[#2B5F8B] px-5 py-4 flex items-center justify-between">
+              <div>
+                <h2 id="history-title" className="font-semibold text-white">保存历史 / History</h2>
+                <p className="mt-1 text-xs text-[#b8d0e1]">选择记录后可继续编辑并再次保存</p>
+              </div>
+              <button
+                onClick={() => setShowHistory(false)}
+                className="text-2xl leading-none text-white/70 hover:text-white"
+                aria-label="关闭历史"
+              >
+                ×
+              </button>
+            </div>
+            <div className="overflow-y-auto p-5">
+              {drafts.length === 0 ? (
+                <div className="py-12 text-center">
+                  <div className="text-gray-400">暂无保存记录</div>
+                  <div className="mt-1 text-xs text-gray-400">填写内容后点击顶部「保存」</div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {[...drafts]
+                    .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
+                    .map((draft) => (
+                      <div
+                        key={draft.id}
+                        className={`rounded-lg border p-4 ${
+                          currentDraftId === draft.id
+                            ? "border-emerald-500 bg-emerald-50/50"
+                            : "border-[#dde4ed] bg-[#fafcff]"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-800 truncate">
+                              {draft.name}
+                              {currentDraftId === draft.id && (
+                                <span className="ml-2 text-xs font-normal text-emerald-600">当前编辑</span>
+                              )}
+                            </div>
+                            <div className="mt-1 text-xs text-gray-500">
+                              {draft.data.projectName || "未填写项目名称"}
+                              {draft.data.projectCode ? ` · ${draft.data.projectCode}` : ""}
+                            </div>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                              保存于 {formatSavedAt(draft.savedAt)}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <button
+                              onClick={() => loadDraft(draft)}
+                              className="px-3 py-1.5 rounded bg-[#2B5F8B] text-xs font-medium text-white hover:bg-[#1e4a6e]"
+                            >
+                              继续编辑
+                            </button>
+                            <button
+                              onClick={() => deleteDraft(draft.id)}
+                              className="px-3 py-1.5 rounded border border-red-200 text-xs text-red-500 hover:bg-red-50"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
