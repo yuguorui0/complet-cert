@@ -1,8 +1,16 @@
-import { useState, useRef } from "react";
-import html2canvas from "html2canvas";
+import { useEffect, useState, useRef } from "react";
+import { toCanvas } from "html-to-image";
 import { jsPDF } from "jspdf";
-import logo from "../logo.png";
-import sigDefault from "../signatures/sig_default.png";
+import {
+  AlignmentType,
+  Document as DocxDocument,
+  ImageRun,
+  Packer,
+  PageOrientation,
+  Paragraph,
+} from "docx";
+import logo from "../logo_optimized.png?inline";
+import sigDefault from "../signatures/sig_default_optimized.jpg?inline";
 import { useOptions } from "../hooks/useOptions";
 import SettingsModal from "../components/SettingsModal";
 
@@ -67,8 +75,95 @@ const defaultData: CertData = {
   notes: "",
   confirmedWithRemote: false,
   remoteContact: "",
-  enriginSig: "",
+  enriginSig: "sig_default",
 };
+
+const A4_RATIO = 297 / 210;
+const WORD_A4_WIDTH_PX = 780;
+
+async function waitForImages(root: HTMLElement) {
+  const images = Array.from(root.querySelectorAll("img"));
+  await Promise.all(
+    images.map(async (img) => {
+      if (!img.complete) {
+        await new Promise<void>((resolve) => {
+          img.addEventListener("load", () => resolve(), { once: true });
+          img.addEventListener("error", () => resolve(), { once: true });
+        });
+      }
+      if (img.decode) {
+        await img.decode().catch(() => undefined);
+      }
+    }),
+  );
+}
+
+async function capturePreview(root: HTMLElement) {
+  if ("fonts" in document) {
+    await document.fonts.ready;
+  }
+  await waitForImages(root);
+
+  const rect = root.getBoundingClientRect();
+  return toCanvas(root, {
+    backgroundColor: "#ffffff",
+    cacheBust: false,
+    pixelRatio: 2,
+    width: Math.ceil(rect.width),
+    height: Math.ceil(Math.max(rect.height, root.scrollHeight)),
+  });
+}
+
+function sliceCanvasIntoA4Pages(source: HTMLCanvasElement) {
+  const pageHeight = Math.floor(source.width * A4_RATIO);
+  const pages: HTMLCanvasElement[] = [];
+
+  for (let y = 0; y < source.height; y += pageHeight) {
+    const sliceHeight = Math.min(pageHeight, source.height - y);
+    const page = document.createElement("canvas");
+    page.width = source.width;
+    page.height = sliceHeight;
+    const ctx = page.getContext("2d");
+    if (!ctx) continue;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, page.width, page.height);
+    ctx.drawImage(
+      source,
+      0,
+      y,
+      source.width,
+      sliceHeight,
+      0,
+      0,
+      source.width,
+      sliceHeight,
+    );
+    pages.push(page);
+  }
+
+  return pages;
+}
+
+function dataUrlToBytes(dataUrl: string) {
+  const base64 = dataUrl.split(",")[1] || "";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 function today() {
   return new Date().toLocaleDateString("zh-CN");
@@ -84,6 +179,14 @@ export default function CertificatePage() {
     addCustomer, updateCustomer, removeCustomer,
     addListItem, updateListItem, removeListItem,
   } = useOptions();
+
+  useEffect(() => {
+    [logo, sigDefault].forEach((src) => {
+      const img = new Image();
+      img.src = src;
+      img.decode?.().catch(() => undefined);
+    });
+  }, []);
 
   function set<K extends keyof CertData>(key: K, val: CertData[K]) {
     setData((d) => ({ ...d, [key]: val }));
@@ -162,79 +265,59 @@ export default function CertificatePage() {
 
   async function handleDownloadPDF() {
     if (!printRef.current) return;
-    const el = printRef.current;
-    const canvas = await html2canvas(el, {
-      scale: 2,
-      useCORS: true,
-      allowTaint: true,
-      backgroundColor: "#ffffff",
-      onclone: (clonedDoc) => {
-        // html2canvas can't parse oklch() used by Tailwind v4.
-        // The certificate uses only inline styles so stripping all
-        // global stylesheets from the clone is safe and fixes the crash.
-        clonedDoc.querySelectorAll("style, link[rel='stylesheet']").forEach((s) => s.remove());
-      },
-    });
-    const imgData = canvas.toDataURL("image/jpeg", 0.98);
+    const canvas = await capturePreview(printRef.current);
+    const pages = sliceCanvasIntoA4Pages(canvas);
     const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pdfW = pdf.internal.pageSize.getWidth();
-    const pdfH = (canvas.height * pdfW) / canvas.width;
-    pdf.addImage(imgData, "JPEG", 0, 0, pdfW, pdfH);
+    pages.forEach((page, index) => {
+      if (index > 0) pdf.addPage("a4", "portrait");
+      const pageH = (page.height * pdfW) / page.width;
+      pdf.addImage(page.toDataURL("image/png"), "PNG", 0, 0, pdfW, pageH);
+    });
     const safeName = (data.projectName || data.projectCode || "certificate").replace(/[/\\?%*:|"<>]/g, "_");
     pdf.save(`完工确认书_${safeName}.pdf`);
   }
 
   async function handleDownloadWord() {
     if (!printRef.current) return;
-    const el = printRef.current;
-
-    // Inline all images as base64 for Word compatibility
-    const cloned = el.cloneNode(true) as HTMLElement;
-    const imgs = cloned.querySelectorAll("img");
-    await Promise.all(Array.from(imgs).map(async (img) => {
-      try {
-        const res = await fetch(img.src);
-        const blob = await res.blob();
-        const b64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(blob);
-        });
-        img.src = b64;
-      } catch { /* keep original src */ }
-    }));
-
-    const htmlContent = `
-      <html xmlns:o='urn:schemas-microsoft-com:office:office'
-            xmlns:w='urn:schemas-microsoft-com:office:word'
-            xmlns='http://www.w3.org/TR/REC-html40'>
-        <head>
-          <meta charset='utf-8'>
-          <title>Completion Certificate</title>
-          <!--[if gte mso 9]><xml>
-            <w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom>
-            <w:DoNotOptimizeForBrowser/></w:WordDocument>
-          </xml><![endif]-->
-          <style>
-            @page { size: A4 portrait; margin: 12mm 14mm 10mm 14mm; }
-            body { font-family: Arial, 'Microsoft YaHei', sans-serif; font-size: 8pt; color: #1a1a1a; }
-            table { border-collapse: collapse; width: 100%; }
-            td, th { border: 1px solid #c8d9e8; padding: 1.2mm 2.5mm; font-size: 7.5pt; }
-            ol { padding-left: 20px; }
-          </style>
-        </head>
-        <body>${cloned.innerHTML}</body>
-      </html>`;
-
-    const blob = new Blob(["\ufeff", htmlContent], {
-      type: "application/msword;charset=utf-8",
+    const canvas = await capturePreview(printRef.current);
+    const pages = sliceCanvasIntoA4Pages(canvas);
+    const children = pages.map((page, index) => {
+      const height = Math.round((page.height / page.width) * WORD_A4_WIDTH_PX);
+      return new Paragraph({
+        pageBreakBefore: index > 0,
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 0 },
+        children: [
+          new ImageRun({
+            type: "png",
+            data: dataUrlToBytes(page.toDataURL("image/png")),
+            transformation: { width: WORD_A4_WIDTH_PX, height },
+          }),
+        ],
+      });
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `completion-cert-${data.projectCode || "certificate"}.doc`;
-    a.click();
-    URL.revokeObjectURL(url);
+
+    const word = new DocxDocument({
+      sections: [
+        {
+          properties: {
+            page: {
+              size: {
+                orientation: PageOrientation.PORTRAIT,
+                width: 11906,
+                height: 16838,
+              },
+              margin: { top: 0, right: 0, bottom: 0, left: 0 },
+            },
+          },
+          children,
+        },
+      ],
+    });
+    const blob = await Packer.toBlob(word);
+    const safeName = (data.projectName || data.projectCode || "certificate").replace(/[/\\?%*:|"<>]/g, "_");
+    downloadBlob(blob, `完工确认书_${safeName}.docx`);
   }
 
   function handleReset() {
@@ -535,7 +618,13 @@ export default function CertificatePage() {
                           onChange={() => set("enriginSig", key)}
                           className="accent-[#2B5F8B]"
                         />
-                        <img src={sig.src} alt={sig.label} className="h-8 w-auto border border-[#dde4ed] rounded px-1 bg-white" />
+                        <img
+                          src={sig.src}
+                          alt={sig.label}
+                          loading="eager"
+                          decoding="sync"
+                          className="h-8 w-auto border border-[#dde4ed] rounded px-1 bg-white"
+                        />
                         <span className="text-sm text-gray-600">{sig.label}</span>
                       </label>
                     ))}
@@ -575,7 +664,13 @@ export default function CertificatePage() {
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "5mm", paddingBottom: "4mm", borderBottom: "1.5px solid #2B5F8B" }}>
               {/* Left: new logo (ENRIGIN LIMITED already in image) + address */}
               <div style={{ width: "30%" }}>
-                <img src={logo} alt="Enrigin Limited" style={{ height: "56px", width: "auto", display: "block", marginBottom: "3px" }} />
+                <img
+                  src={logo}
+                  alt="Enrigin Limited"
+                  loading="eager"
+                  decoding="sync"
+                  style={{ height: "56px", width: "auto", display: "block", marginBottom: "3px" }}
+                />
                 <div style={{ fontSize: "6.5pt", color: "#7a94a8", lineHeight: 1.5 }}>
                   英源國際有限公司<br />
                   9th Floor, Amtel Building, 148 Des Voeux Road, Central, Hong Kong
@@ -758,13 +853,19 @@ const inputCls = "w-full border border-[#dde4ed] rounded px-3 py-1.5 text-sm tex
 function PSecTitle({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
+      display: "flex",
+      alignItems: "center",
+      boxSizing: "border-box",
       backgroundColor: "#2B5F8B",
       color: "white",
       fontWeight: 700,
       fontSize: "7pt",
-      padding: "1.2mm 3mm",
+      lineHeight: "1.2",
+      height: "5.5mm",
+      padding: "0 3mm",
       marginBottom: "1.5mm",
       letterSpacing: "0.3px",
+      fontFamily: "Arial, Helvetica, 'Microsoft YaHei', sans-serif",
     }}>
       {children}
     </div>
@@ -837,6 +938,8 @@ function PSignBox({ label, sub, sigSrc }: { label: string; sub: string; sigSrc?:
           <img
             src={sigSrc}
             alt="signature"
+            loading="eager"
+            decoding="sync"
             style={{ height: "16mm", width: "auto", maxWidth: "88%", objectFit: "contain" }}
           />
         )}
