@@ -64,19 +64,33 @@
     size: A4 portrait;
     margin: 0;
   }
+  html,
   body {
+    width: 210mm !important;
     background: white !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  #root {
+    width: 210mm !important;
     margin: 0 !important;
     padding: 0 !important;
   }
   .no-print {
     display: none !important;
   }
+  .print-shell {
+    width: 210mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+  }
   .print-page {
     box-shadow: none !important;
     border: none !important;
     width: 210mm !important;
-    margin: 0 auto !important;
+    min-height: 297mm !important;
+    margin: 0 !important;
     /* padding kept from inline styles on the element */
   }
   * {

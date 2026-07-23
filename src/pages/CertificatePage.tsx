@@ -1,16 +1,7 @@
 import { useEffect, useState, useRef } from "react";
-import { toCanvas } from "html-to-image";
-import { jsPDF } from "jspdf";
-import {
-  AlignmentType,
-  Document as DocxDocument,
-  ImageRun,
-  Packer,
-  PageOrientation,
-  Paragraph,
-} from "docx";
 import logo from "../logo_optimized.png?inline";
 import sigDefault from "../signatures/sig_default_optimized.jpg?inline";
+import { buildEditableWord } from "../lib/buildEditableWord";
 import { useOptions } from "../hooks/useOptions";
 import SettingsModal from "../components/SettingsModal";
 
@@ -87,8 +78,6 @@ const defaultData: CertData = {
 
 const AUTOSAVE_KEY = "completion-cert-autosave-v1";
 const DRAFTS_KEY = "completion-cert-drafts-v1";
-const A4_RATIO = 297 / 210;
-const WORD_A4_WIDTH_PX = 780;
 
 function loadAutosave(): CertData {
   try {
@@ -115,79 +104,6 @@ function createDraftId() {
 
 function formatSavedAt(value: string) {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
-}
-
-async function waitForImages(root: HTMLElement) {
-  const images = Array.from(root.querySelectorAll("img"));
-  await Promise.all(
-    images.map(async (img) => {
-      if (!img.complete) {
-        await new Promise<void>((resolve) => {
-          img.addEventListener("load", () => resolve(), { once: true });
-          img.addEventListener("error", () => resolve(), { once: true });
-        });
-      }
-      if (img.decode) {
-        await img.decode().catch(() => undefined);
-      }
-    }),
-  );
-}
-
-async function capturePreview(root: HTMLElement) {
-  if ("fonts" in document) {
-    await document.fonts.ready;
-  }
-  await waitForImages(root);
-
-  const rect = root.getBoundingClientRect();
-  return toCanvas(root, {
-    backgroundColor: "#ffffff",
-    cacheBust: false,
-    pixelRatio: 2,
-    width: Math.ceil(rect.width),
-    height: Math.ceil(Math.max(rect.height, root.scrollHeight)),
-  });
-}
-
-function sliceCanvasIntoA4Pages(source: HTMLCanvasElement) {
-  const pageHeight = Math.floor(source.width * A4_RATIO);
-  const pages: HTMLCanvasElement[] = [];
-
-  for (let y = 0; y < source.height; y += pageHeight) {
-    const sliceHeight = Math.min(pageHeight, source.height - y);
-    const page = document.createElement("canvas");
-    page.width = source.width;
-    page.height = sliceHeight;
-    const ctx = page.getContext("2d");
-    if (!ctx) continue;
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, page.width, page.height);
-    ctx.drawImage(
-      source,
-      0,
-      y,
-      source.width,
-      sliceHeight,
-      0,
-      0,
-      source.width,
-      sliceHeight,
-    );
-    pages.push(page);
-  }
-
-  return pages;
-}
-
-function dataUrlToBytes(dataUrl: string) {
-  const base64 = dataUrl.split(",")[1] || "";
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -368,63 +284,15 @@ export default function CertificatePage() {
     if (currentDraftId === id) setCurrentDraftId(null);
   }
 
-  function handlePrint() {
+  function handleDownloadPDF() {
     window.print();
   }
 
-  async function handleDownloadPDF() {
-    if (!printRef.current) return;
-    const canvas = await capturePreview(printRef.current);
-    const pages = sliceCanvasIntoA4Pages(canvas);
-    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    const pdfW = pdf.internal.pageSize.getWidth();
-    pages.forEach((page, index) => {
-      if (index > 0) pdf.addPage("a4", "portrait");
-      const pageH = (page.height * pdfW) / page.width;
-      pdf.addImage(page.toDataURL("image/png"), "PNG", 0, 0, pdfW, pageH);
-    });
-    const safeName = (data.projectName || data.projectCode || "certificate").replace(/[/\\?%*:|"<>]/g, "_");
-    pdf.save(`完工确认书_${safeName}.pdf`);
-  }
-
   async function handleDownloadWord() {
-    if (!printRef.current) return;
-    const canvas = await capturePreview(printRef.current);
-    const pages = sliceCanvasIntoA4Pages(canvas);
-    const children = pages.map((page, index) => {
-      const height = Math.round((page.height / page.width) * WORD_A4_WIDTH_PX);
-      return new Paragraph({
-        pageBreakBefore: index > 0,
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 0, after: 0 },
-        children: [
-          new ImageRun({
-            type: "png",
-            data: dataUrlToBytes(page.toDataURL("image/png")),
-            transformation: { width: WORD_A4_WIDTH_PX, height },
-          }),
-        ],
-      });
+    const blob = await buildEditableWord(data, {
+      logo,
+      signature: data.enriginSig ? SIGNATURES[data.enriginSig]?.src : undefined,
     });
-
-    const word = new DocxDocument({
-      sections: [
-        {
-          properties: {
-            page: {
-              size: {
-                orientation: PageOrientation.PORTRAIT,
-                width: 11906,
-                height: 16838,
-              },
-              margin: { top: 0, right: 0, bottom: 0, left: 0 },
-            },
-          },
-          children,
-        },
-      ],
-    });
-    const blob = await Packer.toBlob(word);
     const safeName = (data.projectName || data.projectCode || "certificate").replace(/[/\\?%*:|"<>]/g, "_");
     downloadBlob(blob, `完工确认书_${safeName}.docx`);
   }
@@ -492,19 +360,13 @@ export default function CertificatePage() {
                 onClick={handleDownloadPDF}
                 className="px-4 py-1.5 rounded text-sm font-medium bg-[#2B5F8B] text-white hover:bg-[#1e4a6e] transition-colors"
               >
-                ↓ PDF
+                导出 PDF
               </button>
               <button
                 onClick={handleDownloadWord}
                 className="px-4 py-1.5 rounded text-sm font-medium border border-[#2B5F8B] text-[#2B5F8B] hover:bg-[#2B5F8B] hover:text-white transition-colors"
               >
-                ↓ Word
-              </button>
-              <button
-                onClick={handlePrint}
-                className="px-4 py-1.5 rounded text-sm font-medium border border-gray-300 text-gray-500 hover:bg-gray-50 transition-colors"
-              >
-                打印 / Print
+                可编辑 Word
               </button>
             </>
           )}
@@ -770,7 +632,7 @@ export default function CertificatePage() {
       )}
       {/* Preview / Print mode */}
       {mode === "preview" && (
-        <div className="py-6 px-4">
+        <div className="print-shell py-6 px-4">
           <div
             ref={printRef}
             className="print-page bg-white mx-auto shadow-lg border border-gray-200"
