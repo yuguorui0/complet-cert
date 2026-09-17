@@ -1,12 +1,14 @@
 import { useEffect, useState, useRef } from "react";
 import logo from "../logo_optimized.png?inline";
 import sigDefault from "../signatures/sig_default_optimized.jpg?inline";
+import sigHandwritten from "../signatures/sig_handwritten.png?inline";
 import { buildEditableWord } from "../lib/buildEditableWord";
 import { useOptions } from "../hooks/useOptions";
 import SettingsModal from "../components/SettingsModal";
 
 const SIGNATURES: Record<string, { label: string; src: string }> = {
   sig_default: { label: "默认签名", src: sigDefault },
+  sig_handwritten: { label: "手写签名", src: sigHandwritten },
 };
 
 type TimelineRow = { bjTime: string; localTime: string; action: string };
