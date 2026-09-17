@@ -8,7 +8,7 @@ import SettingsModal from "../components/SettingsModal";
 
 const SIGNATURES: Record<string, { label: string; src: string }> = {
   sig_default: { label: "默认签名", src: sigDefault },
-  sig_handwritten: { label: "手写签名", src: sigHandwritten },
+  sig_handwritten: { label: "孟令敏", src: sigHandwritten },
 };
 
 type TimelineRow = { bjTime: string; localTime: string; action: string };
@@ -586,7 +586,7 @@ export default function CertificatePage() {
 
                 <div className="mt-4">
                   <label className={labelCls}>服务方签名 / Enrigin Signature</label>
-                  <div className="mt-2 flex flex-wrap gap-3">
+                  <div className="mt-2 flex flex-col items-start gap-2">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="radio"
