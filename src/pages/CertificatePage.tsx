@@ -566,14 +566,14 @@ export default function CertificatePage() {
                 </div>
 
                 <div className="mt-4">
-                  <label className={labelCls}>是否已与客户远程人员确认 / Confirmed with CMI Remote</label>
+                  <label className={labelCls}>是否已与客户远程人员确认 / Confirmed with Customer Remote</label>
                   <div className="flex items-center gap-4 mt-1">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={data.confirmedWithRemote} onChange={e => set("confirmedWithRemote", e.target.checked)} className="accent-[#2B5F8B]" />
                       <span className="text-sm text-gray-700">是 / Yes</span>
                     </label>
                     {data.confirmedWithRemote && (
-                      <input className={`${inputCls} flex-1`} value={data.remoteContact} onChange={e => set("remoteContact", e.target.value)} placeholder="CMI 远程配合人员姓名" />
+                      <input className={`${inputCls} flex-1`} value={data.remoteContact} onChange={e => set("remoteContact", e.target.value)} placeholder="远程配合人员姓名" />
                     )}
                   </div>
                 </div>
