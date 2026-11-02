@@ -797,7 +797,7 @@ export default function CertificatePage() {
             {/* Signature */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6mm" }}>
               <PSignBox label="Enrigin Limited" sub="服务方签章 / Authorized Signature" sigSrc={data.enriginSig ? SIGNATURES[data.enriginSig]?.src : undefined} />
-              <PSignBox label="客户 / Customer" sub="客户签章 / Authorized Signature or Chop" />
+              <PSignBox label="客户 / Customer" sub="客户签章 / Authorized Signature and Chop" />
             </div>
 
             {/* Footer */}
